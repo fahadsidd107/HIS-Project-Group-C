@@ -1,0 +1,24 @@
+# Data — never commit raw ECG data
+data/
+*.dat
+*.hea
+*.atr
+
+# Jupyter
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model checkpoints
+*.pt
+*.pth
+checkpoints/
