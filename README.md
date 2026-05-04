@@ -122,24 +122,14 @@ jupyter notebook notebooks/
 |---|---|
 | University | Frankfurt University of Applied Sciences |
 | Program | Masters — High Integrity Systems |
-| Course | High Integrity Systems (HIS) |
-| Assignment | Assignment 1 — Time Series Analysis |
+| Course | High Integrity Systems (HIS) Project|
 | Instructor | Dr. Fatima Sajid Butt |
 | Semester | Summer 2026 |
-| Student | Muhammad Fahad Siddiqui (Mat. 1544213) |
+| Topic | Time Series Analysis |
+| Dataset | PTB-XL  |
 
 ---
 
 ## License
 
 MIT License — see `LICENSE` file for details.
-
----
-
-## References
-
-1. Wagner et al. — *PTB-XL, a large publicly available ECG dataset*, Nature Scientific Data, 2020
-2. Box et al. — *Time Series Analysis: Forecasting and Control*, Wiley, 2015
-3. Hyndman & Athanasopoulos — *Forecasting: Principles and Practice*, 2018
-4. Brunton & Kutz — *Data-Driven Science and Engineering*, Cambridge, 2022
-5. Joseph — *Modern Time Series Forecasting with Python*, Packt, 2024
