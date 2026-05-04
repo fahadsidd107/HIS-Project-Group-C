@@ -1,5 +1,6 @@
 # Data — never commit raw ECG data
 data/
+reports/figures/
 *.dat
 *.hea
 *.atr
