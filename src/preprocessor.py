@@ -1,8 +1,8 @@
 """
 src/preprocessor.py
 --------------------
-Reusable ECG preprocessing pipeline for the PTB-XL dataset.
-Mirrors the logic in notebooks/02_preprocessing.ipynb.
+Reusable ECG preprocessing pipeline for PTB-XL, updated for both 
+Classification and Time-Series Forecasting tasks.
 
 Pipeline order:
   1. Missing value interpolation
@@ -10,28 +10,14 @@ Pipeline order:
   3. Z-score outlier clipping (±3σ)
   4. Bandpass filter (0.5–40 Hz, Butterworth order 4)
   5. Per-lead Z-score normalization
-  6. Sliding window segmentation
+  6. Sliding window segmentation (Classification OR Forecasting)
   7. Patient-wise train / val / test split
   8. (Optional) Training-time augmentation
-
-Usage
------
-from src.preprocessor import ECGPreprocessor
-
-pre = ECGPreprocessor(fs=100, window_size=500, stride=100)
-X_train, X_val, X_test, y_train, y_val, y_test = pre.run(
-    X_raw, y, window_folds
-)
 """
 
 import numpy as np
 import pandas as pd
 from scipy.signal import butter, filtfilt
-
-
-# ── Constants ────────────────────────────────────────────────────────────────
-LEAD_NAMES = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF',
-              'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
 
 
 class ECGPreprocessor:
@@ -41,7 +27,9 @@ class ECGPreprocessor:
     Parameters
     ----------
     fs          : int   Sampling frequency in Hz (100 or 500).
-    window_size : int   Samples per sliding window (default 500 = 5s at 100 Hz).
+    window_size : int   Samples for input window (default 500 = 5s at 100 Hz).
+    horizon     : int   Samples for target horizon (Forecasting only). 
+                        If 0, segments for Classification.
     stride      : int   Step between consecutive windows (default 100 = 1s).
     lowcut      : float Bandpass lower cutoff in Hz (default 0.5).
     highcut     : float Bandpass upper cutoff in Hz (default 40.0).
@@ -53,6 +41,7 @@ class ECGPreprocessor:
         self,
         fs: int          = 100,
         window_size: int = 500,
+        horizon: int     = 100,
         stride: int      = 100,
         lowcut: float    = 0.5,
         highcut: float   = 40.0,
@@ -61,6 +50,7 @@ class ECGPreprocessor:
     ):
         self.fs          = fs
         self.window_size = window_size
+        self.horizon     = horizon
         self.stride      = stride
         self.lowcut      = lowcut
         self.highcut     = highcut
@@ -91,22 +81,20 @@ class ECGPreprocessor:
     def check_sampling_rate(self, X: np.ndarray) -> bool:
         """
         Verify signals match the expected sampling rate and duration (10s).
-        Raises ValueError if there is a mismatch.
         """
         expected_samples = self.fs * 10
         actual_samples   = X.shape[1]
         if actual_samples != expected_samples:
             raise ValueError(
                 f"Sampling rate mismatch: expected {expected_samples} samples "
-                f"({self.fs} Hz × 10s), got {actual_samples}.\n"
-                f"Set fs=500 if using high-resolution signals."
+                f"({self.fs} Hz × 10s), got {actual_samples}."
             )
         return True
 
     # ── Step 3: Outlier clipping (±N σ) ──────────────────────────────────────
     def clip_outliers(self, X: np.ndarray) -> np.ndarray:
         """
-        Clip amplitude values exceeding ±clip_std standard deviations per lead per record.
+        Clip amplitude values exceeding ±clip_std standard deviations.
         X : (N, samples, 12)
         """
         X_out = X.copy()
@@ -115,8 +103,7 @@ class ECGPreprocessor:
                 lead = X_out[rec_idx, :, lead_idx]
                 mean = lead.mean()
                 std  = lead.std()
-                if std == 0:
-                    continue
+                if std == 0: continue
                 X_out[rec_idx, :, lead_idx] = np.clip(
                     lead,
                     mean - self.clip_std * std,
@@ -127,56 +114,64 @@ class ECGPreprocessor:
     # ── Step 4: Bandpass filter ───────────────────────────────────────────────
     def bandpass_filter(self, X: np.ndarray) -> np.ndarray:
         """
-        Apply a zero-phase Butterworth bandpass filter to each record.
-        Removes baseline wander (< lowcut Hz) and EMG/powerline noise (> highcut Hz).
-        X : (N, samples, 12)
+        Apply a zero-phase Butterworth bandpass filter.
         """
         nyq  = 0.5 * self.fs
         low  = self.lowcut  / nyq
         high = self.highcut / nyq
-        b, a = butter(self.bp_order, [low, high], btype='band')
-
-        X_out = np.array([
-            filtfilt(b, a, rec, axis=0) for rec in X
-        ])
+        # Use sos for better stability in higher orders
+        sos  = butter(self.bp_order, [low, high], btype='band', output='sos')
+        
+        from scipy.signal import sosfiltfilt
+        X_out = np.array([sosfiltfilt(sos, rec, axis=0) for rec in X])
         return X_out
 
     # ── Step 5: Per-lead Z-score normalization ────────────────────────────────
     def normalize(self, X: np.ndarray) -> np.ndarray:
         """
-        Independently standardize each lead of each record to mean=0, std=1.
-        X : (N, samples, 12)
+        Standardize each lead of each record to mean=0, std=1.
         """
         X_out = X.copy()
         for rec_idx in range(X_out.shape[0]):
             for lead_idx in range(X_out.shape[2]):
                 lead = X_out[rec_idx, :, lead_idx]
                 mean = lead.mean()
-                std  = lead.std() or 1.0   # avoid div-by-zero for flat leads
+                std  = lead.std() or 1.0
                 X_out[rec_idx, :, lead_idx] = (lead - mean) / std
         return X_out
 
     # ── Step 6: Sliding window segmentation ───────────────────────────────────
-    def sliding_windows(self, X: np.ndarray, y: np.ndarray):
+    def sliding_windows(self, X: np.ndarray, labels: np.ndarray = None):
         """
-        Segment each record into overlapping fixed-length windows.
-        Each window inherits the label of its parent record.
-
-        Returns
-        -------
-        X_win : (total_windows, window_size, 12)
-        y_win : (total_windows, n_classes)
+        Segment into windows.
+        
+        If self.horizon > 0 (Forecasting):
+            y is the next self.horizon samples.
+        Else (Classification):
+            y is the label of the parent record.
         """
-        n_records, n_samples, _ = X.shape
-        n_win = (n_samples - self.window_size) // self.stride + 1
-
+        n_records, n_samples, n_leads = X.shape
+        
         X_windows, y_windows = [], []
+        
+        # Calculate max starting point
+        # For forecasting: start + window + horizon <= n_samples
+        # For classification: start + window <= n_samples
+        max_start = n_samples - self.window_size - self.horizon
+        
         for rec_idx in range(n_records):
-            for w in range(n_win):
-                start = w * self.stride
-                end   = start + self.window_size
-                X_windows.append(X[rec_idx, start:end, :])
-                y_windows.append(y[rec_idx])
+            for start in range(0, max_start + 1, self.stride):
+                end_x = start + self.window_size
+                X_windows.append(X[rec_idx, start:end_x, :])
+                
+                if self.horizon > 0:
+                    # Forecasting: target is the next window
+                    end_y = end_x + self.horizon
+                    y_windows.append(X[rec_idx, end_x:end_y, :])
+                else:
+                    # Classification: target is the static label
+                    if labels is not None:
+                        y_windows.append(labels[rec_idx])
 
         return np.array(X_windows), np.array(y_windows)
 
@@ -188,25 +183,13 @@ class ECGPreprocessor:
         record_folds: np.ndarray,
     ):
         """
-        Split windowed data using PTB-XL's official strat_fold column.
-        Folds 1-8 → train | Fold 9 → val | Fold 10 → test
-
-        Parameters
-        ----------
-        record_folds : (N_records,) array of strat_fold values per original record.
-                       Will be expanded to match the number of windows.
+        Split based on strat_fold.
+        Folds 1-8: Train, 9: Val, 10: Test.
         """
-        n_win_per_rec = (
-            (self.window_size - self.window_size) // self.stride + 1
-            if self.window_size == X_win.shape[1]
-            else len(X_win) // len(record_folds)
-        )
-        # safer: infer from array lengths
-        n_records     = len(record_folds)
-        n_total_wins  = len(X_win)
-        n_win_per_rec = n_total_wins // n_records
-
-        window_folds = np.repeat(record_folds, n_win_per_rec)
+        # Determine how many windows per record
+        # (Assuming constant number of windows per record due to fixed 10s duration)
+        n_win_per_rec = len(X_win) // len(record_folds)
+        window_folds  = np.repeat(record_folds, n_win_per_rec)
 
         train_m = window_folds <= 8
         val_m   = window_folds == 9
@@ -222,34 +205,33 @@ class ECGPreprocessor:
     def augment(
         self,
         X: np.ndarray,
+        y: np.ndarray = None,
         noise_std:  float = 0.02,
         shift_max:  int   = 50,
         drop_prob:  float = 0.10,
         seed:       int   = 42,
     ) -> np.ndarray:
         """
-        Apply training-time augmentation. NEVER call on val/test sets.
-
-        Strategies:
-          - Amplitude scaling   : gain ∈ [0.9, 1.1]
-          - Additive Gaussian noise : σ = noise_std
-          - Temporal shifting   : random roll ∈ [-shift_max, +shift_max]
-          - Lead dropout        : zero out 1 lead with probability drop_prob
+        Apply training-time augmentation. 
+        Note: If forecasting, augmentation should ideally be applied 
+        carefully or to X only if it breaks temporal continuity of y.
         """
         rng   = np.random.default_rng(seed)
         X_aug = X.copy()
         N     = len(X_aug)
 
         # 1. Amplitude scaling
-        X_aug *= rng.uniform(0.9, 1.1, size=(N, 1, 1))
+        gain = rng.uniform(0.9, 1.1, size=(N, 1, 1))
+        X_aug *= gain
 
         # 2. Additive noise
         X_aug += rng.normal(0, noise_std, size=X_aug.shape)
 
-        # 3. Temporal shifting
-        for i, s in enumerate(rng.integers(-shift_max, shift_max + 1, size=N)):
-            if s != 0:
-                X_aug[i] = np.roll(X_aug[i], s, axis=0)
+        # 3. Temporal shifting (only if not forecasting, or applied to whole sequence)
+        if self.horizon == 0:
+            for i, s in enumerate(rng.integers(-shift_max, shift_max + 1, size=N)):
+                if s != 0:
+                    X_aug[i] = np.roll(X_aug[i], s, axis=0)
 
         # 4. Lead dropout
         for i in range(N):
@@ -258,57 +240,29 @@ class ECGPreprocessor:
 
         return X_aug
 
-    # ── Full pipeline ─────────────────────────────────────────────────────────
     def run(
         self,
         X_raw: np.ndarray,
-        y: np.ndarray,
+        labels: np.ndarray,
         record_folds: np.ndarray,
         augment_train: bool = True,
     ):
         """
-        Execute the full preprocessing pipeline end-to-end.
-
-        Parameters
-        ----------
-        X_raw        : (N, samples, 12)  raw waveforms
-        y            : (N, n_classes)    multi-hot labels
-        record_folds : (N,)              PTB-XL strat_fold per record
-        augment_train: bool              whether to apply augmentation to train set
-
-        Returns
-        -------
-        X_train, X_val, X_test, y_train, y_val, y_test
+        Full run.
         """
-        print("[ECGPreprocessor] Starting pipeline...")
-
         X = self.interpolate_missing(X_raw)
-        print("  ✅ Step 1 — Missing value interpolation")
-
         self.check_sampling_rate(X)
-        print(f"  ✅ Step 2 — Sampling rate OK ({self.fs} Hz)")
-
         X = self.clip_outliers(X)
-        print(f"  ✅ Step 3 — Outlier clipping (±{self.clip_std}σ)")
-
         X = self.bandpass_filter(X)
-        print(f"  ✅ Step 4 — Bandpass filter ({self.lowcut}–{self.highcut} Hz)")
-
         X = self.normalize(X)
-        print("  ✅ Step 5 — Per-lead Z-score normalization")
-
-        X_win, y_win = self.sliding_windows(X, y)
-        print(f"  ✅ Step 6 — Sliding windows → {X_win.shape}")
-
-        X_train, y_train, X_val, y_val, X_test, y_test = self.patient_wise_split(
+        
+        X_win, y_win = self.sliding_windows(X, labels)
+        
+        X_tr, y_tr, X_va, y_va, X_te, y_te = self.patient_wise_split(
             X_win, y_win, record_folds
         )
-        print(f"  ✅ Step 7 — Patient-wise split: "
-              f"train={len(X_train)} | val={len(X_val)} | test={len(X_test)}")
-
+        
         if augment_train:
-            X_train = self.augment(X_train)
-            print("  ✅ Step 8 — Training augmentation applied")
-
-        print("[ECGPreprocessor] Pipeline complete ✅")
-        return X_train, X_val, X_test, y_train, y_val, y_test
+            X_tr = self.augment(X_tr, y_tr)
+            
+        return X_tr, y_tr, X_va, y_va, X_te, y_te

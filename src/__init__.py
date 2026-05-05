@@ -26,13 +26,13 @@ from src.data_loader import (
 from src.preprocessor import ECGPreprocessor
 
 # ── Model ─────────────────────────────────────────────────────────────────────
-# from src.model import ECGModel                 # ← uncomment when ready
+from src.model import LSTMForecast, CNNLSTMForecast, TransformerForecast
 
 # ── Training ──────────────────────────────────────────────────────────────────
-# from src.train import train_model              # ← uncomment when ready
+from src.train import ECGForecastDataset, get_dataloaders, train_model
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
-# from src.evaluate import evaluate_model        # ← uncomment when ready
+from src.evaluate import calculate_forecasting_metrics, print_metrics_table
 
 __all__ = [
     # data_loader
@@ -43,4 +43,15 @@ __all__ = [
     "LOCAL_DB_PATH",
     # preprocessor
     "ECGPreprocessor",
+    # model
+    "LSTMForecast",
+    "CNNLSTMForecast",
+    "TransformerForecast",
+    # train
+    "ECGForecastDataset",
+    "get_dataloaders",
+    "train_model",
+    # evaluate
+    "calculate_forecasting_metrics",
+    "print_metrics_table",
 ]
