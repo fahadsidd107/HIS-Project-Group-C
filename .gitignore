@@ -23,3 +23,6 @@ Thumbs.db
 *.pt
 *.pth
 checkpoints/
+
+# Training logs and artifacts
+reports/training_logs/
