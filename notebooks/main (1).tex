@@ -36,7 +36,7 @@
 \maketitle
 
 \begin{abstract}
-Continuous generative forecasting of multi-lead electrocardiogram (ECG) voltage waveforms across extended temporal horizons represents a critical challenge in computational cardiology. In this work, we scale the forecasting horizon to $4.9$ seconds ($490$ discrete timesteps at $100$~Hz) utilizing the full PTB-XL dataset ($21,799$ records). We identify and resolve a critical systemic failure mode---temporal downsampling (e.g., MaxPooling) completely discards sub-duration cardiac features like the $QRS$ complex. We present two improved frameworks redesigned for zero-pooling, full-resolution forecasting: a deep WaveNet-style fully convolutional network (LSTM-CNN v2, $\sim$1.2M parameters) and a multi-scale Temporal Convolutional Network with U-Net decoder (TCN v4). Both models incorporate a novel \textit{SpikeWeightedMSELoss} that assigns $5\times$ penalty to spike regions, forcing models to learn clinically meaningful $QRS$ morphology rather than flat-line averaging. Our previous baselines achieved macro RMSE of $1.0342$~mV (WaveNet, 409K params) and $1.1029$~mV (TCN v3, 1.8M params). We provide post-hoc explainability through Gradient$\times$Input attribution and occlusion sensitivity, and establish uncertainty bounds via Monte Carlo Dropout ($N=50$, 50\% epistemic vs.\ aleatoric ratio), revealing that long-horizon physiological forecasting is dominated by intrinsic data-level aleatoric uncertainty.
+Continuous generative forecasting of multi-lead electrocardiogram (ECG) voltage waveforms across extended temporal horizons represents a critical challenge in computational cardiology. In this work, we scale the forecasting horizon to $4.9$ seconds ($490$ discrete timesteps at $100$~Hz) utilizing the full PTB-XL dataset ($21,799$ records). We identify and resolve a critical systemic failure mode---temporal downsampling (e.g., MaxPooling) completely discards sub-duration cardiac features like the $QRS$ complex. We present two improved frameworks redesigned for zero-pooling, full-resolution forecasting: a deep WaveNet-style fully convolutional network (LSTM-CNN v2, $1{,}176{,}588$ parameters) and a multi-scale Temporal Convolutional Network with U-Net decoder (TCN v4, $491{,}136$ parameters). Both models incorporate a novel \textit{SpikeWeightedMSELoss} that assigns $5\times$ penalty to spike regions, forcing models to learn clinically meaningful $QRS$ morphology rather than flat-line averaging. Our previous baselines achieved macro RMSE of $1.0342$~mV (WaveNet, 409K params) and $1.1029$~mV (TCN v3, 1.8M params). We provide post-hoc explainability through Gradient$\times$Input attribution and occlusion sensitivity, and establish uncertainty bounds via Monte Carlo Dropout ($N=50$, 50\% epistemic vs.\ aleatoric ratio), revealing that long-horizon physiological forecasting is dominated by intrinsic data-level aleatoric uncertainty.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -77,7 +77,7 @@ Plain MSE allows models to minimize loss by predicting the mean (flat line), sin
 The previous TCN v3 used attention pooling that collapsed $122$ timesteps into a single $128$-d vector---all temporal structure was lost. The new TCN v4 uses a U-Net decoder with ConvTranspose1d upsampling and skip connections from the encoder, preserving spike locations.
 
 \textbf{4. Deeper Dilated Architecture (LSTM-CNN v2, new).}
-Expanded from $7$ to $9$ dilated blocks with $96$ channels ($\sim$1.2M params, up from 409K). Receptive field: $1{,}197$ steps---more than $2\times$ the input window.
+Expanded from $7$ to $9$ dilated blocks with $96$ channels ($1{,}176{,}588$ params, up from 409K). Receptive field: $1{,}197$ steps---more than $2\times$ the input window.
 
 \textbf{5. CosineAnnealing LR Scheduler (both v2 models).}
 Replaced ReduceLROnPlateau with CosineAnnealing ($T_{\text{max}}=30$, $\eta_{\min}=10^{-5}$) for smoother convergence and escape from local minima.
@@ -85,24 +85,31 @@ Replaced ReduceLROnPlateau with CosineAnnealing ($T_{\text{max}}=30$, $\eta_{\mi
 \subsection{Current Training Status (v2 Models)}
 
 \begin{table}[h]
-\caption{Training Progress---v2 Models (In Progress)}
+\caption{Training Progress---v2 Models (In Progress, as of Epoch $26$/$20$)}
 \label{tab:training_status}
 \centering
-\begin{tabular}{lccc}
+\begin{tabular}{lcccc}
 \toprule
-\textbf{Model} & \textbf{Epochs Completed} & \textbf{Est.\ Time/Epoch} & \textbf{Parameters} \\
+\textbf{Model} & \textbf{Params} & \textbf{Epochs} & \textbf{Time/Epoch} & \textbf{Best Val Loss} \\
 \midrule
-LSTM-CNN v2 & $29 / 120$ & $\sim$6--8~min & $\sim$1{,}200{,}000$ \\
-TCN v4 (U-Net) & $59 / 120$ & $\sim$4--6~min & $\sim$1{,}200{,}000$ \\
+\multicolumn{5}{l}{\textit{v2 Models (SpikeWeightedMSELoss, CosineAnnealing, batch=64):}} \\
+LSTM-CNN v2 & $1{,}176{,}588$ & $26/120$ ($22\%$) & $\sim$36~min & $3.748$ (ep.\ 8) \\
+TCN v4 (U-Net) & $491{,}136$ & $20/120$ ($17\%$) & $\sim$49~min & $4.777$ (ep.\ 5) \\
 \midrule
-\multicolumn{4}{l}{\textit{Previous baselines (completed):}} \\
-WaveNet (old) & $29 / 29$ & $\sim$3--4~min & $409{,}100$ \\
-TCN v3 (old) & $59 / 59$ & $\sim$4--6~min & $1{,}807{,}563$ \\
+\multicolumn{5}{l}{\textit{Previous baselines (completed):}} \\
+WaveNet (old) & $409{,}100$ & $29/29$ & $\sim$4~min & $1.090$ (MSE) \\
+TCN v3 (old) & $1{,}807{,}563$ & $59/59$ & $\sim$5~min & $0.263$ (Huber) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\noindent Training is conducted on CPU (Apple M-series). Both v2 models use Adam optimizer (lr=$3\times 10^{-4}$), batch size $64$, gradient clipping at $1.0$, and early stopping with patience $20$.
+\noindent \textbf{Key observations from current training:}
+\begin{itemize}
+    \item \textbf{LSTM-CNN v2:} Train loss dropped $4.45 \to 2.96$ ($-33\%$); val loss $4.10 \to 3.91$ ($-4.5\%$). Best val at epoch~8 ($3.748$); currently at patience $18/20$---approaching early stopping.
+    \item \textbf{TCN v4:} Train loss $4.86 \to 4.05$ ($-17\%$); val loss $4.79 \to 5.03$ ($+5\%$, \textbf{increasing}). Best val at epoch~5 ($4.777$); patience $15/20$---showing signs of overfitting.
+    \item Note: Loss values are \textbf{not directly comparable} to previous baselines because the v2 models use SpikeWeightedMSELoss ($5\times$ spike penalty) vs.\ plain MSE/Huber.
+    \item Training conducted on CPU (Apple M-series). Both models use Adam optimizer (lr=$3 \times 10^{-4}$), gradient clipping at $1.0$, and early stopping with patience $20$.
+\end{itemize}
 
 % ============================================================================
 % SECTION: ARCHITECTURES
@@ -132,6 +139,7 @@ With $L=9$ blocks, $K=7$, and dilations $d_i = 2^i$, $RF = 1 + 9 \times 6 \times
     \item \textbf{Decoder:} ConvTranspose1d upsampling ($122 \to 245 \to 490$) with skip connections from corresponding encoder levels.
     \item \textbf{BatchNorm1d} replaces LayerNorm (previously yielded $10\times$ CPU speedup: $19 \to 4$--$6$~min/epoch).
     \item \textbf{Same SpikeWeightedMSELoss} as LSTM-CNN v2.
+    \item Total parameters: $491{,}136$---significantly lighter than TCN v3 ($1.8$M), achieving faster inference.
 \end{itemize}
 
 % ============================================================================
@@ -167,7 +175,7 @@ With $L=9$ blocks, $K=7$, and dilations $d_i = 2^i$, $RF = 1 + 9 \times 6 \times
     (I,0.39) (II,0.47) (III,0.35) (aVR,0.41) (aVL,0.40) (aVF,0.44)
     (V1,0.79) (V2,1.00) (V3,0.95) (V4,0.89) (V5,0.72) (V6,0.64)
 };
-\legend{LSTM-CNN, TCN}
+\legend{LSTM-CNN, TCN v3}
 
 \nextgroupplot[
     title={(b) 4.9s Forecast (Lead V2)},
@@ -401,13 +409,14 @@ This directly models aleatoric uncertainty and should improve CI coverage from $
 \midrule
 1 & Title \& Core Objective & 1~min \\
 2 & Pipeline: What helped most (Q1, Q6) & 4~min \\
-3 & Architecture: LSTM-CNN v2 \& TCN v4 & 4~min \\
-4 & Quantitative Results \& Training Status & 3~min \\
-5 & Explainability: Gradient$\times$Input, Occlusion (Q2) & 3~min \\
-6 & UQ: MC Dropout, CI Meaning (Q2, Q5) & 4~min \\
-7 & Literature Comparison (Q3) & 2~min \\
-8 & Domain Knowledge Connection (Q4) & 2~min \\
-9 & Future Methods \& Conclusions (Q6) & 2~min \\
+3 & Architecture: LSTM-CNN v2 ($1.18$M) \& TCN v4 ($491$K) & 3~min \\
+4 & Training Status: current epochs, loss curves, patience (Q1) & 3~min \\
+5 & Results: previous baselines + v2 expected improvements & 2~min \\
+6 & Explainability: Gradient$\times$Input, Occlusion (Q2) & 3~min \\
+7 & UQ: MC Dropout, CI Meaning (Q2, Q5) & 3~min \\
+8 & Literature Comparison (Q3) & 2~min \\
+9 & Domain Knowledge Connection (Q4) & 1~min \\
+10 & Future Methods \& Conclusions (Q6) & 3~min \\
 \midrule
 & \textbf{Total} & \textbf{25~min} \\
 \bottomrule
